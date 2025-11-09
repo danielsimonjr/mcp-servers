@@ -54,12 +54,14 @@ export interface Entity {
   name: string;
   entityType: string;
   observations: string[];
+  createdAt?: string;  // ISO 8601 timestamp (auto-generated if not provided)
 }
 
 export interface Relation {
   from: string;
   to: string;
   relationType: string;
+  createdAt?: string;  // ISO 8601 timestamp (auto-generated if not provided)
 }
 
 export interface KnowledgeGraph {
@@ -77,8 +79,16 @@ export class KnowledgeGraphManager {
       const lines = data.split("\n").filter(line => line.trim() !== "");
       return lines.reduce((graph: KnowledgeGraph, line) => {
         const item = JSON.parse(line);
-        if (item.type === "entity") graph.entities.push(item as Entity);
-        if (item.type === "relation") graph.relations.push(item as Relation);
+        if (item.type === "entity") {
+        // Add createdAt if missing for backward compatibility
+        if (!item.createdAt) item.createdAt = new Date().toISOString();
+        graph.entities.push(item as Entity);
+      }
+        if (item.type === "relation") {
+        // Add createdAt if missing for backward compatibility
+        if (!item.createdAt) item.createdAt = new Date().toISOString();
+        graph.relations.push(item as Relation);
+      }
         return graph;
       }, { entities: [], relations: [] });
     } catch (error) {
@@ -95,13 +105,15 @@ export class KnowledgeGraphManager {
         type: "entity",
         name: e.name,
         entityType: e.entityType,
-        observations: e.observations
+        observations: e.observations,
+        createdAt: e.createdAt
       })),
       ...graph.relations.map(r => JSON.stringify({
         type: "relation",
         from: r.from,
         to: r.to,
-        relationType: r.relationType
+        relationType: r.relationType,
+        createdAt: r.createdAt
       })),
     ];
     await fs.writeFile(this.memoryFilePath, lines.join("\n"));
@@ -109,7 +121,10 @@ export class KnowledgeGraphManager {
 
   async createEntities(entities: Entity[]): Promise<Entity[]> {
     const graph = await this.loadGraph();
-    const newEntities = entities.filter(e => !graph.entities.some(existingEntity => existingEntity.name === e.name));
+    const timestamp = new Date().toISOString();
+    const newEntities = entities
+      .filter(e => !graph.entities.some(existingEntity => existingEntity.name === e.name))
+      .map(e => ({ ...e, createdAt: e.createdAt || timestamp }));
     graph.entities.push(...newEntities);
     await this.saveGraph(graph);
     return newEntities;
@@ -117,11 +132,14 @@ export class KnowledgeGraphManager {
 
   async createRelations(relations: Relation[]): Promise<Relation[]> {
     const graph = await this.loadGraph();
-    const newRelations = relations.filter(r => !graph.relations.some(existingRelation => 
-      existingRelation.from === r.from && 
-      existingRelation.to === r.to && 
-      existingRelation.relationType === r.relationType
-    ));
+    const timestamp = new Date().toISOString();
+    const newRelations = relations
+      .filter(r => !graph.relations.some(existingRelation => 
+        existingRelation.from === r.from && 
+        existingRelation.to === r.to && 
+        existingRelation.relationType === r.relationType
+      ))
+      .map(r => ({ ...r, createdAt: r.createdAt || timestamp }));
     graph.relations.push(...newRelations);
     await this.saveGraph(graph);
     return newRelations;
