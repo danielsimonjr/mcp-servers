@@ -56,6 +56,8 @@ export interface Entity {
   observations: string[];
   createdAt?: string;
   lastModified?: string;
+  tags?: string[];
+  importance?: number;
 }
 
 export interface Relation {
@@ -99,6 +101,8 @@ export class KnowledgeGraphManager {
         if (!item.createdAt) item.createdAt = new Date().toISOString();
         // Add lastModified if missing for backward compatibility
         if (!item.lastModified) item.lastModified = item.createdAt;
+        // Phase 3: Backward compatibility for tags and importance
+        // These fields are optional and will be undefined if not present
         graph.entities.push(item as Entity);
       }
         if (item.type === "relation") {
@@ -120,14 +124,20 @@ export class KnowledgeGraphManager {
 
   private async saveGraph(graph: KnowledgeGraph): Promise<void> {
     const lines = [
-      ...graph.entities.map(e => JSON.stringify({
-        type: "entity",
-        name: e.name,
-        entityType: e.entityType,
-        observations: e.observations,
-        createdAt: e.createdAt,
-        lastModified: e.lastModified
-      })),
+      ...graph.entities.map(e => {
+        const entityData: any = {
+          type: "entity",
+          name: e.name,
+          entityType: e.entityType,
+          observations: e.observations,
+          createdAt: e.createdAt,
+          lastModified: e.lastModified
+        };
+        // Phase 3: Only include tags and importance if they exist
+        if (e.tags !== undefined) entityData.tags = e.tags;
+        if (e.importance !== undefined) entityData.importance = e.importance;
+        return JSON.stringify(entityData);
+      }),
       ...graph.relations.map(r => JSON.stringify({
         type: "relation",
         from: r.from,
@@ -145,7 +155,25 @@ export class KnowledgeGraphManager {
     const timestamp = new Date().toISOString();
     const newEntities = entities
       .filter(e => !graph.entities.some(existingEntity => existingEntity.name === e.name))
-      .map(e => ({ ...e, createdAt: e.createdAt || timestamp, lastModified: e.lastModified || timestamp }));
+      .map(e => {
+        const entity: Entity = {
+          ...e,
+          createdAt: e.createdAt || timestamp,
+          lastModified: e.lastModified || timestamp
+        };
+        // Phase 3: Normalize tags to lowercase if provided
+        if (e.tags) {
+          entity.tags = e.tags.map(tag => tag.toLowerCase());
+        }
+        // Phase 3: Validate importance if provided
+        if (e.importance !== undefined) {
+          if (e.importance < 0 || e.importance > 10) {
+            throw new Error(`Importance must be between 0 and 10, got ${e.importance}`);
+          }
+          entity.importance = e.importance;
+        }
+        return entity;
+      });
     graph.entities.push(...newEntities);
     await this.saveGraph(graph);
     return newEntities;
@@ -241,16 +269,46 @@ export class KnowledgeGraphManager {
     return this.loadGraph();
   }
 
-  // Very basic search function
-  async searchNodes(query: string): Promise<KnowledgeGraph> {
+  // Phase 3: Enhanced search function with tags and importance filters
+  async searchNodes(
+    query: string,
+    tags?: string[],
+    minImportance?: number,
+    maxImportance?: number
+  ): Promise<KnowledgeGraph> {
     const graph = await this.loadGraph();
     
+    // Normalize tags to lowercase for case-insensitive matching
+    const normalizedTags = tags?.map(tag => tag.toLowerCase());
+    
     // Filter entities
-    const filteredEntities = graph.entities.filter(e => 
-      e.name.toLowerCase().includes(query.toLowerCase()) ||
-      e.entityType.toLowerCase().includes(query.toLowerCase()) ||
-      e.observations.some(o => o.toLowerCase().includes(query.toLowerCase()))
-    );
+    const filteredEntities = graph.entities.filter(e => {
+      // Text search
+      const matchesQuery = 
+        e.name.toLowerCase().includes(query.toLowerCase()) ||
+        e.entityType.toLowerCase().includes(query.toLowerCase()) ||
+        e.observations.some(o => o.toLowerCase().includes(query.toLowerCase()));
+      
+      if (!matchesQuery) return false;
+      
+      // Phase 3: Tag filter
+      if (normalizedTags && normalizedTags.length > 0) {
+        if (!e.tags || e.tags.length === 0) return false;
+        const entityTags = e.tags.map(tag => tag.toLowerCase());
+        const hasMatchingTag = normalizedTags.some(tag => entityTags.includes(tag));
+        if (!hasMatchingTag) return false;
+      }
+      
+      // Phase 3: Importance filter
+      if (minImportance !== undefined && (e.importance === undefined || e.importance < minImportance)) {
+        return false;
+      }
+      if (maxImportance !== undefined && (e.importance === undefined || e.importance > maxImportance)) {
+        return false;
+      }
+      
+      return true;
+    });
   
     // Create a Set of filtered entity names for quick lookup
     const filteredEntityNames = new Set(filteredEntities.map(e => e.name));
@@ -290,17 +348,34 @@ export class KnowledgeGraphManager {
     return filteredGraph;
   }
 
-  async searchByDateRange(startDate?: string, endDate?: string, entityType?: string): Promise<KnowledgeGraph> {
+  // Phase 3: Enhanced searchByDateRange with tags filter
+  async searchByDateRange(
+    startDate?: string,
+    endDate?: string,
+    entityType?: string,
+    tags?: string[]
+  ): Promise<KnowledgeGraph> {
     const graph = await this.loadGraph();
 
     const start = startDate ? new Date(startDate) : null;
     const end = endDate ? new Date(endDate) : null;
 
-    // Filter entities by date range and optionally by entity type
+    // Normalize tags to lowercase for case-insensitive matching
+    const normalizedTags = tags?.map(tag => tag.toLowerCase());
+
+    // Filter entities by date range and optionally by entity type and tags
     const filteredEntities = graph.entities.filter(e => {
       // Check entity type filter
       if (entityType && e.entityType !== entityType) {
         return false;
+      }
+
+      // Phase 3: Tag filter
+      if (normalizedTags && normalizedTags.length > 0) {
+        if (!e.tags || e.tags.length === 0) return false;
+        const entityTags = e.tags.map(tag => tag.toLowerCase());
+        const hasMatchingTag = normalizedTags.some(tag => entityTags.includes(tag));
+        if (!hasMatchingTag) return false;
       }
 
       // Check date range using createdAt or lastModified
@@ -414,6 +489,95 @@ export class KnowledgeGraphManager {
         latest: (latestRelationDate as Date).toISOString()
       } : undefined,
     };
+  }
+  // Phase 3: Add tags to an entity
+  async addTags(entityName: string, tags: string[]): Promise<{ entityName: string; addedTags: string[] }> {
+    const graph = await this.loadGraph();
+    const timestamp = new Date().toISOString();
+
+    const entity = graph.entities.find(e => e.name === entityName);
+    if (!entity) {
+      throw new Error(`Entity with name ${entityName} not found`);
+    }
+
+    // Initialize tags array if it doesn't exist
+    if (!entity.tags) {
+      entity.tags = [];
+    }
+
+    // Normalize tags to lowercase and filter out duplicates
+    const normalizedTags = tags.map(tag => tag.toLowerCase());
+    const newTags = normalizedTags.filter(tag => !entity.tags!.includes(tag));
+
+    entity.tags.push(...newTags);
+
+    // Update lastModified timestamp if tags were added
+    if (newTags.length > 0) {
+      entity.lastModified = timestamp;
+    }
+
+    await this.saveGraph(graph);
+
+    return { entityName, addedTags: newTags };
+  }
+
+  // Phase 3: Remove tags from an entity
+  async removeTags(entityName: string, tags: string[]): Promise<{ entityName: string; removedTags: string[] }> {
+    const graph = await this.loadGraph();
+    const timestamp = new Date().toISOString();
+
+    const entity = graph.entities.find(e => e.name === entityName);
+    if (!entity) {
+      throw new Error(`Entity with name ${entityName} not found`);
+    }
+
+    if (!entity.tags) {
+      return { entityName, removedTags: [] };
+    }
+
+    // Normalize tags to lowercase
+    const normalizedTags = tags.map(tag => tag.toLowerCase());
+    const originalLength = entity.tags.length;
+
+    // Filter out the tags to remove
+    entity.tags = entity.tags.filter(tag => !normalizedTags.includes(tag.toLowerCase()));
+
+    const removedTags = normalizedTags.filter(tag => 
+      originalLength > entity.tags!.length || 
+      !entity.tags!.map(t => t.toLowerCase()).includes(tag)
+    );
+
+    // Update lastModified timestamp if tags were removed
+    if (entity.tags.length < originalLength) {
+      entity.lastModified = timestamp;
+    }
+
+    await this.saveGraph(graph);
+
+    return { entityName, removedTags };
+  }
+
+  // Phase 3: Set importance level for an entity
+  async setImportance(entityName: string, importance: number): Promise<{ entityName: string; importance: number }> {
+    const graph = await this.loadGraph();
+    const timestamp = new Date().toISOString();
+
+    // Validate importance range
+    if (importance < 0 || importance > 10) {
+      throw new Error(`Importance must be between 0 and 10, got ${importance}`);
+    }
+
+    const entity = graph.entities.find(e => e.name === entityName);
+    if (!entity) {
+      throw new Error(`Entity with name ${entityName} not found`);
+    }
+
+    entity.importance = importance;
+    entity.lastModified = timestamp;
+
+    await this.saveGraph(graph);
+
+    return { entityName, importance };
   }
 }
 
@@ -591,11 +755,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "search_nodes",
-        description: "Search for nodes in the knowledge graph based on a query",
+        description: "Search for nodes in the knowledge graph based on a query, with optional filters for tags and importance",
         inputSchema: {
           type: "object",
           properties: {
             query: { type: "string", description: "The search query to match against entity names, types, and observation content" },
+            tags: { 
+              type: "array", 
+              items: { type: "string" },
+              description: "Optional array of tags to filter by (case-insensitive)"
+            },
+            minImportance: {
+              type: "number",
+              description: "Optional minimum importance level (0-10)"
+            },
+            maxImportance: {
+              type: "number",
+              description: "Optional maximum importance level (0-10)"
+            },
           },
           required: ["query"],
           additionalProperties: false,
@@ -620,7 +797,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 ,
       {
         name: "search_by_date_range",
-        description: "Search for entities and relations within a specific date range, optionally filtered by entity type. Uses createdAt or lastModified timestamps.",
+        description: "Search for entities and relations within a specific date range, optionally filtered by entity type and tags. Uses createdAt or lastModified timestamps.",
         inputSchema: {
           type: "object",
           properties: {
@@ -636,6 +813,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "Filter by specific entity type (optional)"
             },
+            tags: { 
+              type: "array", 
+              items: { type: "string" },
+              description: "Optional array of tags to filter by (case-insensitive)"
+            },
           },
           additionalProperties: false,
         },
@@ -646,6 +828,67 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {},
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "add_tags",
+        description: "Add tags to an existing entity in the knowledge graph. Tags are stored as lowercase for case-insensitive matching.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityName: {
+              type: "string",
+              description: "The name of the entity to add tags to"
+            },
+            tags: {
+              type: "array",
+              items: { type: "string" },
+              description: "An array of tags to add to the entity"
+            },
+          },
+          required: ["entityName", "tags"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "remove_tags",
+        description: "Remove tags from an existing entity in the knowledge graph",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityName: {
+              type: "string",
+              description: "The name of the entity to remove tags from"
+            },
+            tags: {
+              type: "array",
+              items: { type: "string" },
+              description: "An array of tags to remove from the entity"
+            },
+          },
+          required: ["entityName", "tags"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "set_importance",
+        description: "Set the importance level for an entity. Importance must be a number between 0 and 10.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityName: {
+              type: "string",
+              description: "The name of the entity to set importance for"
+            },
+            importance: {
+              type: "number",
+              description: "The importance level (0-10, where 0 is least important and 10 is most important)",
+              minimum: 0,
+              maximum: 10
+            },
+          },
+          required: ["entityName", "importance"],
           additionalProperties: false,
         },
       }
@@ -685,11 +928,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       await knowledgeGraphManager.deleteRelations(args.relations as Relation[]);
       return { content: [{ type: "text", text: "Relations deleted successfully" }] };
     case "search_nodes":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.searchNodes(args.query as string), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.searchNodes(args.query as string, args.tags as string[] | undefined, args.minImportance as number | undefined, args.maxImportance as number | undefined), null, 2) }] };
     case "open_nodes":
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.openNodes(args.names as string[]), null, 2) }] };
     case "search_by_date_range":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.searchByDateRange(args.startDate as string | undefined, args.endDate as string | undefined, args.entityType as string | undefined), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.searchByDateRange(args.startDate as string | undefined, args.endDate as string | undefined, args.entityType as string | undefined, args.tags as string[] | undefined), null, 2) }] };
+    case "add_tags":
+      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.addTags(args.entityName as string, args.tags as string[]), null, 2) }] };
+    case "remove_tags":
+      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.removeTags(args.entityName as string, args.tags as string[]), null, 2) }] };
+    case "set_importance":
+      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphManager.setImportance(args.entityName as string, args.importance as number), null, 2) }] };
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
