@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Added a `vite` override (`^8.0.16`) in the root `package.json` to pull the patched vite into vitest's transform dependency, resolving the HIGH `server.fs.deny`-bypass advisory (GHSA-fx2h-pf6j-xcff) that `npm audit fix` could not bump in place. (The advisory is a dev-server issue; `vitest run` does not start vite's dev server, so it was not exploitable here, but the dependency is now patched — vite 8.1.0.) `npm audit` is 0; the 39-test memory suite passes.
+
 ### Fixed
 - `knowledge-graph.test.ts`: updated the `createEntities`/`createRelations` assertions to account for the `createdAt`/`lastModified` timestamps those methods stamp. The tests predated the timestamp feature and asserted exact equality against timestamp-less inputs, so they failed once the feature shipped. Behavior is unchanged; the assertions now verify both the preserved fields and the stamped timestamps. Restores a green suite (39/39).
 

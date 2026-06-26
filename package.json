@@ -37,6 +37,7 @@
     "@modelcontextprotocol/server-memory": "file:src/memory"
   },
   "overrides": {
-    "@modelcontextprotocol/sdk": "^1.26.0"
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "vite": "^8.0.16"
   }
 }
