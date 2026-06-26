@@ -35,7 +35,12 @@ describe('KnowledgeGraphManager', () => {
 
       const newEntities = await manager.createEntities(entities);
       expect(newEntities).toHaveLength(2);
-      expect(newEntities).toEqual(entities);
+      // createEntities stamps createdAt/lastModified; the original fields are preserved.
+      expect(newEntities).toMatchObject(entities);
+      for (const e of newEntities) {
+        expect(typeof e.createdAt).toBe('string');
+        expect(e.lastModified).toBe(e.createdAt);
+      }
 
       const graph = await manager.readGraph();
       expect(graph.entities).toHaveLength(2);
@@ -74,7 +79,10 @@ describe('KnowledgeGraphManager', () => {
 
       const newRelations = await manager.createRelations(relations);
       expect(newRelations).toHaveLength(1);
-      expect(newRelations).toEqual(relations);
+      // createRelations stamps createdAt/lastModified; the original fields are preserved.
+      expect(newRelations).toMatchObject(relations);
+      expect(typeof newRelations[0].createdAt).toBe('string');
+      expect(newRelations[0].lastModified).toBe(newRelations[0].createdAt);
 
       const graph = await manager.readGraph();
       expect(graph.relations).toHaveLength(1);
