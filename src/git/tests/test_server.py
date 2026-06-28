@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 import git
-from mcp_server_git.server import git_checkout, git_branch, git_add
+from mcp_server_git.server import git_checkout, git_branch, git_add, git_diff
 import shutil
 
 @pytest.fixture
@@ -91,3 +91,25 @@ def test_git_add_specific_files(test_repository):
     assert "file1.txt" in staged_files
     assert "file2.txt" not in staged_files
     assert result == "Files staged successfully"
+
+
+# --- Security regressions: argument injection + path traversal ---
+
+def test_git_add_rejects_path_outside_repo(test_repository, tmp_path):
+    """git_add must not stage files resolving outside the repository working tree."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    with pytest.raises(ValueError, match="outside the repository"):
+        git_add(test_repository, ["../outside.txt"])
+
+
+def test_git_checkout_rejects_option_injection(test_repository):
+    """A branch name starting with '-' must be refused (argument injection)."""
+    with pytest.raises(ValueError, match="argument injection"):
+        git_checkout(test_repository, "--orphan=evil")
+
+
+def test_git_diff_rejects_option_injection(test_repository):
+    """A diff target starting with '-' must be refused (argument injection)."""
+    with pytest.raises(ValueError, match="argument injection"):
+        git_diff(test_repository, "--output=/tmp/pwned")

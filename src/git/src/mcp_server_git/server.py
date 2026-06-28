@@ -18,6 +18,20 @@ from pydantic import BaseModel, Field
 # Default number of context lines to show in diff output
 DEFAULT_CONTEXT_LINES = 3
 
+
+def _reject_option_injection(value: str, param: str) -> None:
+    """Reject user-supplied refs/targets that git would parse as an option flag.
+
+    Values like ``--output=/etc/passwd`` or ``-O`` passed where a revision or
+    branch name is expected let a caller smuggle arbitrary git options
+    (argument injection — can overwrite local files via diff/checkout). Refuse
+    anything that begins with ``-``.
+    """
+    if value.startswith("-"):
+        raise ValueError(
+            f"Invalid {param}: refusing a value starting with '-' (argument injection)"
+        )
+
 class GitStatus(BaseModel):
     repo_path: str
 
@@ -116,7 +130,9 @@ def git_diff_staged(repo: git.Repo, context_lines: int = DEFAULT_CONTEXT_LINES) 
     return repo.git.diff(f"--unified={context_lines}", "--cached")
 
 def git_diff(repo: git.Repo, target: str, context_lines: int = DEFAULT_CONTEXT_LINES) -> str:
-    return repo.git.diff(f"--unified={context_lines}", target)
+    _reject_option_injection(target, "target")
+    # Trailing "--" ends option parsing so target can never be read as a pathspec/option.
+    return repo.git.diff(f"--unified={context_lines}", target, "--")
 
 def git_commit(repo: git.Repo, message: str) -> str:
     commit = repo.index.commit(message)
@@ -126,6 +142,16 @@ def git_add(repo: git.Repo, files: list[str]) -> str:
     if files == ["."]:
         repo.git.add(".")
     else:
+        # Confine staging to the working tree: reject any path that resolves
+        # outside repo.working_dir (path traversal — staging files outside the
+        # repository boundary).
+        working_dir = Path(repo.working_dir).resolve()
+        for f in files:
+            resolved = (working_dir / f).resolve()
+            if resolved != working_dir and working_dir not in resolved.parents:
+                raise ValueError(
+                    f"Refusing to stage path outside the repository: {f}"
+                )
         repo.index.add(files)
     return "Files staged successfully"
 
@@ -179,6 +205,7 @@ def git_create_branch(repo: git.Repo, branch_name: str, base_branch: str | None 
     return f"Created branch '{branch_name}' from '{base.name}'"
 
 def git_checkout(repo: git.Repo, branch_name: str) -> str:
+    _reject_option_injection(branch_name, "branch_name")
     repo.git.checkout(branch_name)
     return f"Switched to branch '{branch_name}'"
 
